@@ -5,7 +5,9 @@ import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 from pandas.plotting import scatter_matrix
-from sklearn.model_selection import train_test_split, StratifiedShuffleSplit, cross_val_score
+from scipy import stats
+from sklearn.model_selection import (train_test_split, StratifiedShuffleSplit, cross_val_score, GridSearchCV,
+                                     RandomizedSearchCV)
 from sklearn.impute import SimpleImputer
 from sklearn.preprocessing import OrdinalEncoder, OneHotEncoder, StandardScaler
 from sklearn.pipeline import Pipeline
@@ -14,6 +16,7 @@ from sklearn.compose import ColumnTransformer
 from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_squared_error
 from sklearn.tree import DecisionTreeRegressor
+from sklearn.ensemble import RandomForestRegressor
 
 
 DOWNLOAD_ROOT = "https://raw.githubusercontent.com/ageron/handson-ml2/master/"
@@ -319,3 +322,89 @@ lin_rmse_scores = np.sqrt(-lin_mse_scores)
 
 print('-----------------------------------------------------------------------')
 display_scores(lin_rmse_scores)
+
+# Last model try
+
+forest_reg = RandomForestRegressor(n_estimators=100, random_state=42)
+forest_reg.fit(housing_prepared, housing_labels)
+housing_predictions_forest = forest_reg.predict(housing_prepared)
+forest_mse = mean_squared_error(housing_labels, housing_predictions)
+forest_rmse = np.sqrt(forest_mse)
+
+print('-----------------------------------------------------------------------')
+print('RandomForest:', forest_rmse)
+forest_scores = cross_val_score(forest_reg, housing_prepared, housing_labels, cv=10, scoring='neg_mean_squared_error')
+forest_rmse_scores = np.sqrt(-forest_scores)
+display_scores(forest_rmse_scores)
+
+
+# ======================================================================================================================
+# Tuning the model
+
+# ===============================
+# Grid search
+
+param_grid = [
+    # try 12 (3×4) combinations of hyperparameters
+    {'n_estimators':[3, 10, 30], 'max_features':[2,4,6,8]},
+    # then try 6 (2×3) combinations with bootstrap set as False
+    {'bootstrap':[False], 'n_estimators':[3, 10], 'max_features': [2,3,4]},
+]
+
+forest_reg = RandomForestRegressor(random_state=42)
+# train across 5 folds, that's a total of (12+6)*5=90 rounds of training
+grid_search = GridSearchCV(forest_reg, param_grid, cv=5, scoring='neg_mean_squared_error', return_train_score=True)
+grid_search.fit(housing_prepared, housing_labels)
+
+print('-----------------------------------------------------------------------')
+print(grid_search.best_estimator_)
+cvres = grid_search.cv_results_
+for mean_score, params in zip(cvres['mean_test_score'], cvres['params']):
+    print(np.sqrt(-mean_score), params)
+
+# ===============================
+# Randomized Search
+
+"""
+When you are exploring more than a few combinations, you may want to use RandomizedSearchCV instead.
+Instead of trying all possible combinations, it evaluates a given number of random combinations by selecting
+a random value for each hyperparameter at every iteration.
+"""
+
+# param_distribs = {
+#         'n_estimators': randint(low=1, high=200),
+#         'max_features': randint(low=1, high=8),
+#     }
+#
+# forest_reg = RandomForestRegressor(random_state=42)
+# rnd_search = RandomizedSearchCV(forest_reg, param_distributions=param_distribs,
+#                                 n_iter=10, cv=5, scoring='neg_mean_squared_error', random_state=42)
+# rnd_search.fit(housing_prepared, housing_labels)
+#
+# cvres = rnd_search.cv_results_
+# for mean_score, params in zip(cvres["mean_test_score"], cvres["params"]):
+#     print(np.sqrt(-mean_score), params)
+
+
+# ======================================================================================================================
+# Evaluating model on the Test set
+
+final_model = grid_search.best_estimator_
+
+X_test = strat_test_set.drop("median_house_value", axis=1)
+y_test = strat_test_set["median_house_value"].copy()
+
+X_test_prepared = full_pipeline.transform(X_test)
+final_predictions = final_model.predict(X_test_prepared)
+
+final_mse = mean_squared_error(y_test, final_predictions)
+final_rmse = np.sqrt(final_mse)
+
+print('-----------------------------------------------------------------------')
+confidence = 0.95
+squared_errors = (final_predictions - y_test) ** 2
+conf_int = np.sqrt(stats.t.interval(confidence, len(squared_errors) - 1,
+                         loc=squared_errors.mean(),
+                         scale=stats.sem(squared_errors)))
+print(final_rmse)
+print('95% Confidence Interval:', conf_int)
